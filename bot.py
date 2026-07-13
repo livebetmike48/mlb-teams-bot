@@ -121,6 +121,13 @@ class OffenseBot(discord.Client):
         )
         self.tree.add_command(setchannel_cmd)
 
+        checkfangraphs_cmd = app_commands.Command(
+            name="checkfangraphs",
+            description="Debug: test pybaseball's team_pitching() and show what columns come back",
+            callback=self._checkfangraphs_callback,
+        )
+        self.tree.add_command(checkfangraphs_cmd)
+
         try:
             guild_id = os.getenv("GUILD_ID")
             if guild_id:
@@ -165,6 +172,39 @@ class OffenseBot(discord.Client):
         await interaction.response.send_message(
             f"✅ Daily trend digest (12 PM ET) will post in {interaction.channel.mention}."
         )
+
+    async def _checkfangraphs_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        try:
+            def _fetch():
+                import pybaseball
+                return pybaseball.team_pitching(2026)
+
+            df = await asyncio.to_thread(_fetch)
+        except Exception as e:
+            await interaction.followup.send(f"pybaseball call failed: {type(e).__name__}: {e}"[:2000])
+            return
+
+        columns = list(df.columns)
+        # Look specifically for anything resembling role/reliever/starter splits
+        role_related = [c for c in columns if any(k in c.lower() for k in ["role", "relie", "start", "sv", "hld"])]
+
+        msg = (
+            f"**pybaseball.team_pitching(2026) results:**\n\n"
+            f"Rows: {len(df)}, Columns: {len(columns)}\n\n"
+            f"Role/reliever-related columns found: {role_related if role_related else 'NONE'}\n\n"
+            f"First few columns: {columns[:20]}\n\n"
+        )
+
+        # Show one team's row (e.g. Braves, since that's the one we already
+        # know the discrepancy for) so we can compare directly
+        if "Team" in df.columns:
+            braves_row = df[df["Team"].str.contains("Atlanta|Braves|ATL", case=False, na=False)]
+            if not braves_row.empty:
+                era_cols = [c for c in columns if "ERA" in c.upper()]
+                msg += f"Atlanta row, ERA-related columns: {braves_row[era_cols].to_dict('records') if era_cols else 'no ERA columns found'}"
+
+        await interaction.followup.send(msg[:2000])
 
     async def on_ready(self):
         log.info("Logged in as %s", self.user)
