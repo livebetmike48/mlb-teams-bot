@@ -25,6 +25,16 @@ def build_trends_embed(team: dict, runs_log: list[dict], platoon: dict,
                         team_pitching: dict, bullpen_era: dict) -> discord.Embed:
     embed = discord.Embed(title=f"{team['name']} Trends", color=discord.Color.orange())
 
+    wins, losses = trends.overall_record(runs_log)
+    last10_w, last10_l = trends.last_n_record(runs_log, 10)
+    streak = trends.current_win_loss_streak(runs_log)
+    streak_text = f"{streak['result']}{streak['length']}" if streak else "-"
+    embed.add_field(
+        name="Record",
+        value=f"Overall: {wins}-{losses}\nLast 10: {last10_w}-{last10_l}\nStreak: {streak_text}",
+        inline=True,
+    )
+
     notable = trends.find_notable_streaks(runs_log)
     if notable:
         lines = [f"{'🔥' if n['type'] == 'hot' else '🥶'} {n['label']} in {n['length']} straight" for n in notable]
@@ -205,6 +215,12 @@ async def _daily_digest_body(bot: OffenseBot):
             continue
 
         team_lines = []
+        wins, losses = trends.overall_record(runs_log)
+        streak = trends.current_win_loss_streak(runs_log)
+        if streak and streak["length"] >= 5:
+            emoji = "🎉" if streak["result"] == "W" else "💀"
+            team_lines.append(f"{emoji} {streak['result']}{streak['length']} streak (season: {wins}-{losses})")
+
         notable = trends.find_notable_streaks(runs_log)
         pitching_notable = trends.find_notable_pitching_streaks(runs_log)
 
