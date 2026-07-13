@@ -171,6 +171,54 @@ def get_pitcher_game_log(person_id: int, season: int = CURRENT_SEASON) -> list[d
     return splits
 
 
+def get_bullpen_era_windows(pitcher_ids: list[int], team_runs_log: list[dict],
+                             season: int = CURRENT_SEASON) -> dict:
+    """
+    Bullpen ERA (relief appearances only) across three windows: season,
+    last 10 team games, last 5 team games. Fetches each pitcher's full game
+    log once, then filters by date for each window -- much cheaper than
+    fetching three times. The cutoff dates come from the TEAM's last 5/10
+    game dates (not each pitcher's own last N outings), since bullpen usage
+    isn't uniform across relievers and we want "how has the pen performed
+    during the team's last N games," not each individual arm's own history.
+    """
+    def _window_era(entries, since_date=None):
+        total_er, total_outs = 0, 0
+        for entry in entries:
+            if entry["is_start"]:
+                continue
+            if since_date and entry["date"] < since_date:
+                continue
+            total_er += entry["er"]
+            ip_str = entry["ip"]
+            try:
+                whole, _, frac = ip_str.partition(".")
+                total_outs += int(whole) * 3 + {"0": 0, "1": 1, "2": 2}.get(frac, 0)
+            except Exception:
+                pass
+        if total_outs == 0:
+            return {"era": "-", "ip": 0.0}
+        innings = total_outs / 3
+        era = (total_er * 9) / innings
+        return {"era": f"{era:.2f}", "ip": round(innings, 1)}
+
+    last10_cutoff = team_runs_log[-10]["date"] if len(team_runs_log) >= 10 else (team_runs_log[0]["date"] if team_runs_log else None)
+    last5_cutoff = team_runs_log[-5]["date"] if len(team_runs_log) >= 5 else last10_cutoff
+
+    all_entries = []
+    for pid in pitcher_ids:
+        try:
+            all_entries.extend(get_pitcher_game_log(pid, season))
+        except Exception:
+            continue
+
+    return {
+        "season": _window_era(all_entries),
+        "last10": _window_era(all_entries, last10_cutoff),
+        "last5": _window_era(all_entries, last5_cutoff),
+    }
+
+
 def get_bullpen_era(pitcher_ids: list[int], season: int = CURRENT_SEASON) -> dict:
     """
     Aggregate ERA across the given pitchers' RELIEF appearances only (starts
