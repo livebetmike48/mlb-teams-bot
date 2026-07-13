@@ -77,13 +77,12 @@ def build_trends_embed(team: dict, runs_log: list[dict], platoon: dict,
         )
 
     if bullpen_era:
-        s, l10, l5 = bullpen_era.get("season", {}), bullpen_era.get("last10", {}), bullpen_era.get("last5", {})
+        s = bullpen_era.get("season", {})
         embed.add_field(
-            name="Bullpen ERA (relief only)",
-            value=f"Last 5: {l5.get('era', '-')}*\nLast 10: {l10.get('era', '-')}*\nSeason: {s.get('era', '-')}",
+            name="Bullpen ERA (relief only, season)",
+            value=f"{s.get('era', '-')} ({s.get('ip', 0)} IP)",
             inline=True,
         )
-        embed.add_field(name="\u200b", value="*Last 5/10 are close approximations; Season is exact", inline=False)
 
     vs_lhp = platoon.get("vs_lhp")
     vs_rhp = platoon.get("vs_rhp")
