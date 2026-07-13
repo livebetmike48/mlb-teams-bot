@@ -80,9 +80,10 @@ def build_trends_embed(team: dict, runs_log: list[dict], platoon: dict,
         s, l10, l5 = bullpen_era.get("season", {}), bullpen_era.get("last10", {}), bullpen_era.get("last5", {})
         embed.add_field(
             name="Bullpen ERA (relief only)",
-            value=f"Last 5: {l5.get('era', '-')}\nLast 10: {l10.get('era', '-')}\nSeason: {s.get('era', '-')}",
+            value=f"Last 5: {l5.get('era', '-')}*\nLast 10: {l10.get('era', '-')}*\nSeason: {s.get('era', '-')}",
             inline=True,
         )
+        embed.add_field(name="\u200b", value="*Last 5/10 are close approximations; Season is exact", inline=False)
 
     vs_lhp = platoon.get("vs_lhp")
     vs_rhp = platoon.get("vs_rhp")
@@ -151,9 +152,7 @@ class OffenseBot(discord.Client):
                 runs_log = await asyncio.to_thread(mlb_api.get_team_runs_log, team["id"])
                 platoon = await asyncio.to_thread(mlb_api.get_team_platoon_splits, team["id"])
                 team_pitching = await asyncio.to_thread(mlb_api.get_team_pitching_stats, team["id"])
-                roster_pitchers = await asyncio.to_thread(mlb_api.get_active_roster, team["id"])
-                pitcher_ids = [p["id"] for p in roster_pitchers]
-                bullpen_era = await asyncio.to_thread(mlb_api.get_bullpen_era_windows, pitcher_ids, runs_log)
+                bullpen_era = await asyncio.to_thread(mlb_api.get_bullpen_era_windows, team["id"], runs_log)
             except Exception as e:
                 await interaction.followup.send(f"Couldn't reach the MLB API right now: {e}")
                 return
