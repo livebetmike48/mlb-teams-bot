@@ -175,6 +175,7 @@ def get_pitcher_game_log(person_id: int, season: int = CURRENT_SEASON) -> list[d
             stat = split.get("stat", {}) or {}
             splits.append({
                 "date": split.get("date"),
+                "game_pk": (split.get("game") or {}).get("gamePk"),
                 "er": stat.get("earnedRuns", 0),
                 "ip": stat.get("inningsPitched", "0.0"),
                 "is_start": bool(stat.get("gamesStarted")),
@@ -185,95 +186,54 @@ def get_pitcher_game_log(person_id: int, season: int = CURRENT_SEASON) -> list[d
 def get_bullpen_era_windows(team_id: int, team_runs_log: list[dict],
                              season: int = CURRENT_SEASON) -> dict:
     """
-    Bullpen ERA computed as Team Total minus Starters' Total, rather than
-    summing the CURRENT active roster's relief stats. That roster-based
+    Season bullpen ERA, computed as Team Total minus Starters' Total, rather
+    than summing the CURRENT active roster's relief stats. That roster-based
     approach silently missed any pitcher who was later traded, DFA'd,
     optioned, or placed on the IL -- their innings just vanished from the
     total, understating the real bullpen ERA (confirmed against a real
     discrepancy: our old number for Atlanta was 2.19 vs. FanGraphs' 3.06).
 
-    Season window: exact, using team season totals (confirmed accurate
-    against FanGraphs) minus every starter's actual starts this season,
-    regardless of current roster status.
-
-    Last 5/10 windows: team runs allowed in those specific games (already
-    in team_runs_log) is used as an earned-run approximation, since exact
-    windowed team-earned-run data isn't available without per-game boxscore
-    calls. Unearned runs are relatively uncommon, so this is a reasonable
-    approximation -- noted here rather than presented as exact.
+    Exact, using team season totals (confirmed accurate against FanGraphs
+    for most teams) minus every starter's actual starts this season,
+    regardless of current roster status. Last 5/10 windows were removed --
+    they required approximating team earned runs from total runs allowed,
+    which wasn't precise enough to stand behind.
     """
-    game_dates = {g["date"] for g in team_runs_log}
     starter_ids = {g["own_starter_id"] for g in team_runs_log if g.get("own_starter_id")}
 
-    starts_by_date = {}  # date -> (er, outs) for that day's start
+    game_pks = {g["game_pk"] for g in team_runs_log}
+    starts_by_game = {}  # game_pk -> (er, outs) -- keyed by unique game, not date,
+    # since two games can share a calendar date on a doubleheader, and keying by
+    # date alone would silently overwrite one game's starter stats with the other's
     for sid in starter_ids:
         try:
             full_log = get_pitcher_game_log(sid, season)
         except Exception:
             continue
         for entry in full_log:
-            if not entry["is_start"] or entry["date"] not in game_dates:
+            if not entry["is_start"] or entry["game_pk"] not in game_pks:
                 continue
             try:
                 whole, _, frac = entry["ip"].partition(".")
                 outs = int(whole) * 3 + {"0": 0, "1": 1, "2": 2}.get(frac, 0)
             except Exception:
                 outs = 0
-            starts_by_date[entry["date"]] = (entry["er"], outs)
+            starts_by_game[entry["game_pk"]] = (entry["er"], outs)
 
-    def _starters_totals(since_date=None):
-        er, outs = 0, 0
-        for date, (start_er, start_outs) in starts_by_date.items():
-            if since_date and date < since_date:
-                continue
-            er += start_er
-            outs += start_outs
-        return er, outs
+    starters_er = sum(er for er, _ in starts_by_game.values())
+    starters_outs = sum(outs for _, outs in starts_by_game.values())
 
-    def _team_totals_from_log(since_date=None):
-        games = [g for g in team_runs_log if not since_date or g["date"] >= since_date]
-        runs_allowed = sum(g["runs_allowed"] for g in games)
-        return runs_allowed
-
-    results = {}
-
-    # Season window: exact, via confirmed-accurate team totals
     team_season = get_team_pitching_stats(team_id, season)
     team_er = team_season.get("earned_runs", 0)
     team_ip = team_season.get("innings_pitched", 0.0)
-    starters_er, starters_outs = _starters_totals()
+
     bullpen_er = max(0, team_er - starters_er)
     bullpen_outs = max(0, round(team_ip * 3) - starters_outs)
+
     if bullpen_outs > 0:
         bullpen_ip = bullpen_outs / 3
-        results["season"] = {"era": f"{(bullpen_er * 9) / bullpen_ip:.2f}", "ip": round(bullpen_ip, 1)}
-    else:
-        results["season"] = {"era": "-", "ip": 0.0}
-
-    # Last 10 / Last 5 windows: approximated using runs allowed as earned runs
-    last10_cutoff = team_runs_log[-10]["date"] if len(team_runs_log) >= 10 else (team_runs_log[0]["date"] if team_runs_log else None)
-    last5_cutoff = team_runs_log[-5]["date"] if len(team_runs_log) >= 5 else last10_cutoff
-
-    for label, cutoff in [("last10", last10_cutoff), ("last5", last5_cutoff)]:
-        window_team_er = _team_totals_from_log(cutoff)
-        window_starters_er, window_starters_outs = _starters_totals(cutoff)
-        window_bullpen_er = max(0, window_team_er - window_starters_er)
-
-        # Innings for the window: total team IP for those games, minus starters' outs.
-        # Approximate team IP per game as 9 innings (standard game length) minus early
-        # exits isn't tracked here, so this uses starters' actual outs as the split point.
-        window_games = [g for g in team_runs_log if not cutoff or g["date"] >= cutoff]
-        # Estimate: 27 outs/game standard, minus starters' outs = bullpen outs (rough
-        # but reasonable for a trend indicator, not a precise stat)
-        estimated_bullpen_outs = max(0, len(window_games) * 27 - window_starters_outs)
-
-        if estimated_bullpen_outs > 0:
-            bullpen_ip = estimated_bullpen_outs / 3
-            results[label] = {"era": f"{(window_bullpen_er * 9) / bullpen_ip:.2f}", "ip": round(bullpen_ip, 1)}
-        else:
-            results[label] = {"era": "-", "ip": 0.0}
-
-    return results
+        return {"season": {"era": f"{(bullpen_er * 9) / bullpen_ip:.2f}", "ip": round(bullpen_ip, 1)}}
+    return {"season": {"era": "-", "ip": 0.0}}
 
 
 def get_bullpen_era(pitcher_ids: list[int], season: int = CURRENT_SEASON) -> dict:
