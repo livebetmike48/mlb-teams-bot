@@ -27,6 +27,33 @@ NOTABLE_PITCHING_BAD_THRESHOLDS = [
 ]
 
 
+def overall_record(runs_log: list[dict]) -> tuple[int, int]:
+    wins = sum(1 for g in runs_log if g["won"])
+    losses = len(runs_log) - wins
+    return wins, losses
+
+
+def last_n_record(runs_log: list[dict], n: int) -> tuple[int, int]:
+    games = runs_log[-n:]
+    wins = sum(1 for g in games if g["won"])
+    losses = len(games) - wins
+    return wins, losses
+
+
+def current_win_loss_streak(runs_log: list[dict]) -> dict | None:
+    """Returns {'result': 'W'|'L', 'length': N} for the current active streak, or None if empty."""
+    if not runs_log:
+        return None
+    last_result = runs_log[-1]["won"]
+    length = 0
+    for g in reversed(runs_log):
+        if g["won"] == last_result:
+            length += 1
+        else:
+            break
+    return {"result": "W" if last_result else "L", "length": length}
+
+
 def current_streak_length(runs_log: list[dict], condition) -> int:
     """
     Counts how many of the most recent consecutive games satisfy `condition`
