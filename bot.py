@@ -121,6 +121,13 @@ class OffenseBot(discord.Client):
         )
         self.tree.add_command(setchannel_cmd)
 
+        checkstatcast_cmd = app_commands.Command(
+            name="checkstatcast",
+            description="Debug: test Baseball Savant's Statcast CSV export for a player",
+            callback=self._checkstatcast_callback,
+        )
+        self.tree.add_command(checkstatcast_cmd)
+
         try:
             guild_id = os.getenv("GUILD_ID")
             if guild_id:
@@ -165,6 +172,61 @@ class OffenseBot(discord.Client):
         await interaction.response.send_message(
             f"✅ Daily trend digest (12 PM ET) will post in {interaction.channel.mention}."
         )
+
+    async def _checkstatcast_callback(self, interaction: discord.Interaction, player_id: str, start_date: str, end_date: str):
+        await interaction.response.defer()
+        import requests
+        import csv
+        import io
+
+        url = "https://baseballsavant.mlb.com/statcast_search/csv"
+        params = {
+            "all": "true", "hfPT": "", "hfAB": "", "hfBBT": "", "hfPR": "", "hfZ": "",
+            "stadium": "", "hfBBL": "", "hfNewZones": "", "hfGT": "R|PO|S|=",
+            "hfSea": "", "hfSit": "", "player_type": "batter", "hfOuts": "",
+            "opponent": "", "pitcher_throws": "", "batter_stands": "", "hfSA": "",
+            "game_date_gt": start_date, "game_date_lt": end_date,
+            "batters_lookup[]": player_id, "team": "", "position": "", "hfRO": "",
+            "home_road": "", "hfFlag": "", "metric_1": "", "hfInn": "",
+            "min_pitches": 0, "min_results": 0, "group_by": "name",
+            "sort_col": "pitches", "player_event_sort": "h_launch_speed",
+            "sort_order": "desc", "min_abs": 0, "type": "details",
+        }
+
+        try:
+            resp = await asyncio.to_thread(requests.get, url, params=params, timeout=20)
+            status = resp.status_code
+            text = resp.text
+        except Exception as e:
+            await interaction.followup.send(f"Request failed entirely: {e}")
+            return
+
+        if status != 200:
+            await interaction.followup.send(f"Status {status} (not 200). Response preview:\n```{text[:1200]}```")
+            return
+
+        try:
+            reader = csv.reader(io.StringIO(text))
+            rows = list(reader)
+        except Exception as e:
+            await interaction.followup.send(f"Got status 200 but couldn't parse as CSV: {e}\n```{text[:800]}```")
+            return
+
+        if len(rows) < 2:
+            await interaction.followup.send(f"Status 200, valid CSV format, but 0 data rows returned.\nHeader: {rows[0] if rows else 'EMPTY'}")
+            return
+
+        header = rows[0]
+        sample_row = rows[1]
+        msg = (
+            f"**Statcast CSV export test — SUCCESS**\n\n"
+            f"Status: {status}\n"
+            f"Rows returned: {len(rows) - 1}\n"
+            f"Columns: {len(header)}\n\n"
+            f"First 15 columns: {header[:15]}\n\n"
+            f"Sample first row (first 15 values): {sample_row[:15]}"
+        )
+        await interaction.followup.send(msg[:2000])
 
     async def on_ready(self):
         log.info("Logged in as %s", self.user)
