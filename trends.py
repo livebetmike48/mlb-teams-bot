@@ -1,0 +1,96 @@
+"""
+Detects notable team offensive streaks from a game-by-game runs log,
+e.g. "scored 5+ runs in 10 straight games" or "held to 3 or fewer in 4
+straight games". Streaks are counted backward from the most recent game.
+"""
+
+# Thresholds worth calling out automatically. Each is (label, condition_fn, min_length).
+NOTABLE_HOT_THRESHOLDS = [
+    ("5+ runs", lambda r: r >= 5, 5),
+    ("7+ runs", lambda r: r >= 7, 3),
+]
+NOTABLE_COLD_THRESHOLDS = [
+    ("3 or fewer runs", lambda r: r <= 3, 5),
+    ("1 or fewer runs", lambda r: r <= 1, 3),
+]
+
+# Runs ALLOWED thresholds -- for the pitching/defensive side of trends
+NOTABLE_PITCHING_GOOD_THRESHOLDS = [
+    ("held opponents to 3 or fewer", lambda r: r <= 3, 5),
+    ("held opponents to 1 or fewer", lambda r: r <= 1, 3),
+]
+NOTABLE_PITCHING_BAD_THRESHOLDS = [
+    ("allowed 5+ runs", lambda r: r >= 5, 5),
+    ("allowed 7+ runs", lambda r: r >= 7, 3),
+]
+
+
+def current_streak_length(runs_log: list[dict], condition) -> int:
+    """
+    Counts how many of the most recent consecutive games satisfy `condition`
+    (a function taking runs scored, returning bool). Streak breaks the
+    moment a game fails the condition, counting backward from the last game.
+    """
+    count = 0
+    for game in reversed(runs_log):
+        if condition(game["runs"]):
+            count += 1
+        else:
+            break
+    return count
+
+
+def find_notable_pitching_streaks(runs_log: list[dict]) -> list[dict]:
+    """Same streak logic, applied to runs ALLOWED for the pitching side."""
+    if not runs_log:
+        return []
+
+    notable = []
+    for label, condition, min_length in NOTABLE_PITCHING_GOOD_THRESHOLDS:
+        length = current_streak_length(
+            [{"runs": g["runs_allowed"]} for g in runs_log], condition
+        )
+        if length >= min_length:
+            notable.append({"type": "good", "label": label, "length": length})
+
+    for label, condition, min_length in NOTABLE_PITCHING_BAD_THRESHOLDS:
+        length = current_streak_length(
+            [{"runs": g["runs_allowed"]} for g in runs_log], condition
+        )
+        if length >= min_length:
+            notable.append({"type": "bad", "label": label, "length": length})
+
+    return notable
+
+
+def average_runs_allowed(runs_log: list[dict], last_n: int = None) -> float | None:
+    games = runs_log[-last_n:] if last_n else runs_log
+    if not games:
+        return None
+    return sum(g["runs_allowed"] for g in games) / len(games)
+
+
+def find_notable_streaks(runs_log: list[dict]) -> list[dict]:
+    """Returns any currently-active notable streaks (hot or cold) worth flagging."""
+    if not runs_log:
+        return []
+
+    notable = []
+    for label, condition, min_length in NOTABLE_HOT_THRESHOLDS:
+        length = current_streak_length(runs_log, condition)
+        if length >= min_length:
+            notable.append({"type": "hot", "label": label, "length": length})
+
+    for label, condition, min_length in NOTABLE_COLD_THRESHOLDS:
+        length = current_streak_length(runs_log, condition)
+        if length >= min_length:
+            notable.append({"type": "cold", "label": label, "length": length})
+
+    return notable
+
+
+def average_runs(runs_log: list[dict], last_n: int = None) -> float | None:
+    games = runs_log[-last_n:] if last_n else runs_log
+    if not games:
+        return None
+    return sum(g["runs"] for g in games) / len(games)
