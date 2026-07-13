@@ -1,9 +1,11 @@
 import os
 import logging
 import asyncio
+from datetime import datetime, timedelta, timezone, time as dtime
 
 import discord
 from discord import app_commands
+from discord.ext import tasks
 from dotenv import load_dotenv
 
 import mlb_api
@@ -93,7 +95,7 @@ class OffenseBot(discord.Client):
 
         setchannel_cmd = app_commands.Command(
             name="setchannel",
-            description="Set this channel (not currently used for automatic posts, reserved for future use)",
+            description="Set this channel to receive the daily trends digest (12 PM ET)",
             callback=self._setchannel_callback,
         )
         self.tree.add_command(setchannel_cmd)
@@ -142,14 +144,99 @@ class OffenseBot(discord.Client):
     async def _setchannel_callback(self, interaction: discord.Interaction):
         storage.set_config("announce_channel_id", str(interaction.channel_id))
         await interaction.response.send_message(
-            f"✅ Channel saved (reserved for future automatic trend alerts, not used yet)."
+            f"✅ Daily trend digest (12 PM ET) will post in {interaction.channel.mention}."
         )
 
     async def on_ready(self):
         log.info("Logged in as %s", self.user)
+        if not daily_digest.is_running():
+            daily_digest.start(self)
 
 
 client = OffenseBot()
+
+
+def et_date_str(offset_days: int = 0) -> str:
+    et = datetime.now(timezone.utc) - timedelta(hours=4)
+    et += timedelta(days=offset_days)
+    return et.strftime("%Y-%m-%d")
+
+
+async def send_chunked(channel, lines: list[str], limit: int = 1900):
+    if not lines:
+        return
+    chunk = ""
+    for line in lines:
+        if len(chunk) + len(line) > limit:
+            await channel.send(chunk)
+            chunk = ""
+        chunk += line + "\n"
+    if chunk.strip():
+        await channel.send(chunk)
+
+
+# 12 PM ET = 16:00 UTC (drifts an hour during EST in the off-season, same
+# known limitation as elsewhere in these bots)
+@tasks.loop(time=dtime(hour=16, minute=0))
+async def daily_digest(bot: OffenseBot):
+    try:
+        await _daily_digest_body(bot)
+    except Exception as e:
+        log.error("daily_digest cycle failed unexpectedly, will retry next scheduled run: %s", e)
+
+
+async def _daily_digest_body(bot: OffenseBot):
+    channel_id = storage.get_config("announce_channel_id")
+    if not channel_id:
+        return
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        return
+
+    today = et_date_str(0)
+    lines = [f"**📊 Daily Team Trends — {today}**\n"]
+
+    for team in bot.teams:
+        try:
+            runs_log = await asyncio.to_thread(mlb_api.get_team_runs_log, team["id"])
+            todays_hand = await asyncio.to_thread(mlb_api.get_todays_opponent_hand, team["id"], today)
+        except Exception as e:
+            log.error("Daily digest failed for team %s: %s", team["abbreviation"], e)
+            continue
+
+        team_lines = []
+        notable = trends.find_notable_streaks(runs_log)
+        pitching_notable = trends.find_notable_pitching_streaks(runs_log)
+
+        for n in notable:
+            emoji = "🔥" if n["type"] == "hot" else "🥶"
+            team_lines.append(f"{emoji} {n['label']} in {n['length']} straight games")
+        for n in pitching_notable:
+            emoji = "✅" if n["type"] == "good" else "⚠️"
+            team_lines.append(f"{emoji} {n['label']} in {n['length']} straight games (pitching)")
+
+        if todays_hand in ("L", "R"):
+            hand_label = "LHP" if todays_hand == "L" else "RHP"
+            hand_streaks = trends.find_notable_streaks_vs_handedness(runs_log, todays_hand)
+            for n in hand_streaks:
+                emoji = "🔥" if n["type"] == "hot" else "🥶"
+                team_lines.append(f"{emoji} {n['label']} in {n['length']} straight games started by a {hand_label}")
+
+        if team_lines:
+            lines.append(f"**{team['name']}**")
+            lines.extend(team_lines)
+            lines.append("")
+
+    if len(lines) == 1:
+        lines.append("No notable trends across the league today.")
+
+    await send_chunked(channel, lines)
+    log.info("Posted daily digest")
+
+
+@daily_digest.before_loop
+async def before_daily_digest():
+    await client.wait_until_ready()
 
 if __name__ == "__main__":
     if not TOKEN:
