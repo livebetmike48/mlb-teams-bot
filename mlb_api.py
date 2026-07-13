@@ -9,6 +9,29 @@ BASE = "https://statsapi.mlb.com/api/v1"
 CURRENT_SEASON = 2026
 
 
+def get_todays_opponent_hand(team_id: int, date_str: str) -> str | None:
+    """Returns 'L'/'R'/None -- today's opposing probable starter's handedness, if a game exists today."""
+    resp = requests.get(
+        f"{BASE}/schedule",
+        params={"sportId": 1, "teamId": team_id, "date": date_str, "hydrate": "probablePitcher"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    for date_entry in data.get("dates", []):
+        for g in date_entry.get("games", []):
+            is_home = g["teams"]["home"]["team"]["id"] == team_id
+            other_side = "away" if is_home else "home"
+            pitcher = (g["teams"][other_side].get("probablePitcher") or {})
+            pitcher_id = pitcher.get("id")
+            if not pitcher_id:
+                return None
+            hand_map = get_pitchers_handedness([pitcher_id])
+            return hand_map.get(pitcher_id)
+    return None
+
+
 def get_all_teams() -> list[dict]:
     resp = requests.get(f"{BASE}/teams", params={"sportId": 1}, timeout=15)
     resp.raise_for_status()
@@ -22,13 +45,17 @@ def get_all_teams() -> list[dict]:
 def get_team_runs_log(team_id: int, season: int = CURRENT_SEASON) -> list[dict]:
     """
     Game-by-game runs scored AND allowed for a team this season, ordered
-    oldest to newest, using the team schedule + linescore.
+    oldest to newest, including the OPPOSING starter's handedness (via
+    probablePitcher, which for completed games reflects who actually
+    started in the vast majority of cases -- rare late scratches could
+    cause a mismatch, worth knowing but not a major concern for trend
+    purposes).
     """
     resp = requests.get(
         f"{BASE}/schedule",
         params={
             "sportId": 1, "teamId": team_id, "season": season,
-            "gameType": "R", "hydrate": "linescore",
+            "gameType": "R", "hydrate": "linescore,probablePitcher",
         },
         timeout=15,
     )
@@ -36,6 +63,7 @@ def get_team_runs_log(team_id: int, season: int = CURRENT_SEASON) -> list[dict]:
     data = resp.json()
 
     games = []
+    opp_pitcher_ids = set()
     for date_entry in data.get("dates", []):
         for g in date_entry.get("games", []):
             if g["status"].get("abstractGameState") != "Final":
@@ -47,13 +75,40 @@ def get_team_runs_log(team_id: int, season: int = CURRENT_SEASON) -> list[dict]:
             runs_allowed = g["teams"][other_side].get("score")
             if runs is None or runs_allowed is None:
                 continue
+
+            opp_pitcher = (g["teams"][other_side].get("probablePitcher") or {})
+            opp_pitcher_id = opp_pitcher.get("id")
+            if opp_pitcher_id:
+                opp_pitcher_ids.add(opp_pitcher_id)
+
             games.append({
                 "date": g["officialDate"], "runs": runs, "runs_allowed": runs_allowed,
-                "game_pk": g["gamePk"],
+                "game_pk": g["gamePk"], "opp_pitcher_id": opp_pitcher_id,
             })
 
     games.sort(key=lambda g: g["date"])
+
+    # One batched lookup for all opposing starters' handedness, instead of
+    # one call per game
+    hand_by_id = get_pitchers_handedness(list(opp_pitcher_ids)) if opp_pitcher_ids else {}
+    for g in games:
+        g["opp_pitcher_hand"] = hand_by_id.get(g["opp_pitcher_id"])
+
     return games
+
+
+def get_pitchers_handedness(pitcher_ids: list[int]) -> dict:
+    """Batched lookup: {pitcher_id: 'L'|'R'|None}."""
+    if not pitcher_ids:
+        return {}
+    ids_str = ",".join(str(i) for i in pitcher_ids)
+    resp = requests.get(f"{BASE}/people", params={"personIds": ids_str}, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    return {
+        p["id"]: (p.get("pitchHand") or {}).get("code")
+        for p in data.get("people", [])
+    }
 
 
 def get_team_pitching_stats(team_id: int, season: int = CURRENT_SEASON) -> dict:
@@ -148,6 +203,8 @@ def get_bullpen_era(pitcher_ids: list[int], season: int = CURRENT_SEASON) -> dic
     era = (total_er * 9) / innings if innings > 0 else 0
     return {"era": f"{era:.2f}", "ip": round(innings, 1), "er": total_er}
 
+
+def get_team_platoon_splits(team_id: int, season: int = CURRENT_SEASON) -> dict:
     """Season-to-date team offense vs LHP and vs RHP, using the sitCodes
     already confirmed working (vl,vr) for individual player splits."""
     resp = requests.get(
