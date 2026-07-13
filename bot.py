@@ -51,13 +51,23 @@ def build_trends_embed(team: dict, runs_log: list[dict], platoon: dict,
 
     last10 = trends.average_runs(runs_log, last_n=10)
     last5 = trends.average_runs(runs_log, last_n=5)
+    season_avg = trends.average_runs(runs_log)
     if last10 is not None:
-        embed.add_field(name="Runs Scored/Game", value=f"Last 5: {last5:.1f}\nLast 10: {last10:.1f}", inline=True)
+        embed.add_field(
+            name="Runs Scored/Game",
+            value=f"Last 5: {last5:.1f}\nLast 10: {last10:.1f}\nSeason: {season_avg:.1f}",
+            inline=True,
+        )
 
     ra_last10 = trends.average_runs_allowed(runs_log, last_n=10)
     ra_last5 = trends.average_runs_allowed(runs_log, last_n=5)
+    ra_season = trends.average_runs_allowed(runs_log)
     if ra_last10 is not None:
-        embed.add_field(name="Runs Allowed/Game", value=f"Last 5: {ra_last5:.1f}\nLast 10: {ra_last10:.1f}", inline=True)
+        embed.add_field(
+            name="Runs Allowed/Game",
+            value=f"Last 5: {ra_last5:.1f}\nLast 10: {ra_last10:.1f}\nSeason: {ra_season:.1f}",
+            inline=True,
+        )
 
     if team_pitching:
         embed.add_field(
@@ -66,10 +76,11 @@ def build_trends_embed(team: dict, runs_log: list[dict], platoon: dict,
             inline=True,
         )
 
-    if bullpen_era and bullpen_era.get("era") != "-":
+    if bullpen_era:
+        s, l10, l5 = bullpen_era.get("season", {}), bullpen_era.get("last10", {}), bullpen_era.get("last5", {})
         embed.add_field(
             name="Bullpen ERA (relief only)",
-            value=f"{bullpen_era['era']} ERA ({bullpen_era['ip']} IP)",
+            value=f"Last 5: {l5.get('era', '-')}\nLast 10: {l10.get('era', '-')}\nSeason: {s.get('era', '-')}",
             inline=True,
         )
 
@@ -142,7 +153,7 @@ class OffenseBot(discord.Client):
                 team_pitching = await asyncio.to_thread(mlb_api.get_team_pitching_stats, team["id"])
                 roster_pitchers = await asyncio.to_thread(mlb_api.get_active_roster, team["id"])
                 pitcher_ids = [p["id"] for p in roster_pitchers]
-                bullpen_era = await asyncio.to_thread(mlb_api.get_bullpen_era, pitcher_ids)
+                bullpen_era = await asyncio.to_thread(mlb_api.get_bullpen_era_windows, pitcher_ids, runs_log)
             except Exception as e:
                 await interaction.followup.send(f"Couldn't reach the MLB API right now: {e}")
                 return
