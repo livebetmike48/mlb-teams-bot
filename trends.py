@@ -8,10 +8,12 @@ straight games". Streaks are counted backward from the most recent game.
 NOTABLE_HOT_THRESHOLDS = [
     ("5+ runs", lambda r: r >= 5, 5),
     ("7+ runs", lambda r: r >= 7, 3),
+    ("4+ runs", lambda r: r >= 4, 15),
 ]
 NOTABLE_COLD_THRESHOLDS = [
     ("3 or fewer runs", lambda r: r <= 3, 5),
     ("1 or fewer runs", lambda r: r <= 1, 3),
+    ("haven't scored 4+ runs", lambda r: r < 4, 8),
 ]
 
 # Runs ALLOWED thresholds -- for the pitching/defensive side of trends
@@ -68,6 +70,30 @@ def average_runs_allowed(runs_log: list[dict], last_n: int = None) -> float | No
     if not games:
         return None
     return sum(g["runs_allowed"] for g in games) / len(games)
+
+
+def find_notable_streaks_vs_handedness(runs_log: list[dict], hand: str) -> list[dict]:
+    """
+    Same streak logic, but only among games specifically started by a
+    pitcher of the given handedness ('L' or 'R') -- e.g. 'scored 5+ runs in
+    5 straight games started by a LHP'. Filters to that subsequence first
+    (consecutive among those specific matchups, not consecutive calendar
+    games), then applies the same streak detection.
+    """
+    filtered = [g for g in runs_log if g.get("opp_pitcher_hand") == hand]
+    if not filtered:
+        return []
+
+    notable = []
+    for label, condition, min_length in NOTABLE_HOT_THRESHOLDS:
+        length = current_streak_length(filtered, condition)
+        if length >= min_length:
+            notable.append({"type": "hot", "label": label, "length": length})
+    for label, condition, min_length in NOTABLE_COLD_THRESHOLDS:
+        length = current_streak_length(filtered, condition)
+        if length >= min_length:
+            notable.append({"type": "cold", "label": label, "length": length})
+    return notable
 
 
 def find_notable_streaks(runs_log: list[dict]) -> list[dict]:
