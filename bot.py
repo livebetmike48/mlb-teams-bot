@@ -121,13 +121,6 @@ class OffenseBot(discord.Client):
         )
         self.tree.add_command(setchannel_cmd)
 
-        checkstatcast_cmd = app_commands.Command(
-            name="checkstatcast",
-            description="Debug: test Baseball Savant's Statcast CSV export for a player",
-            callback=self._checkstatcast_callback,
-        )
-        self.tree.add_command(checkstatcast_cmd)
-
         try:
             guild_id = os.getenv("GUILD_ID")
             if guild_id:
@@ -172,86 +165,6 @@ class OffenseBot(discord.Client):
         await interaction.response.send_message(
             f"✅ Daily trend digest (12 PM ET) will post in {interaction.channel.mention}."
         )
-
-    async def _checkstatcast_callback(self, interaction: discord.Interaction, player_name: str, start_date: str, end_date: str):
-        await interaction.response.defer()
-        import requests
-        import csv
-        import io
-
-        # Resolve name -> MLB ID first, using the same people/search endpoint
-        # already proven working elsewhere in these bots
-        try:
-            search_resp = await asyncio.to_thread(
-                requests.get, "https://statsapi.mlb.com/api/v1/people/search",
-                params={"names": player_name}, timeout=15,
-            )
-            search_data = search_resp.json()
-            people = search_data.get("people", [])
-        except Exception as e:
-            await interaction.followup.send(f"Player name lookup failed: {e}"[:2000])
-            return
-
-        if not people:
-            await interaction.followup.send(f"No player found matching '{player_name}'.")
-            return
-
-        player_id = people[0]["id"]
-        resolved_name = people[0].get("fullName", player_name)
-
-        url = "https://baseballsavant.mlb.com/statcast_search/csv"
-        params = {
-            "all": "true", "hfPT": "", "hfAB": "", "hfBBT": "", "hfPR": "", "hfZ": "",
-            "stadium": "", "hfBBL": "", "hfNewZones": "", "hfGT": "R|PO|S|=",
-            "hfSea": "", "hfSit": "", "player_type": "pitcher", "hfOuts": "",
-            "opponent": "", "pitcher_throws": "", "batter_stands": "", "hfSA": "",
-            "game_date_gt": start_date, "game_date_lt": end_date,
-            "pitchers_lookup[]": player_id, "team": "", "position": "", "hfRO": "",
-            "home_road": "", "hfFlag": "", "metric_1": "", "hfInn": "",
-            "min_pitches": 0, "min_results": 0, "group_by": "name",
-            "sort_col": "pitches", "player_event_sort": "h_launch_speed",
-            "sort_order": "desc", "min_abs": 0, "type": "details",
-        }
-
-        try:
-            resp = await asyncio.to_thread(requests.get, url, params=params, timeout=20)
-            status = resp.status_code
-            text = resp.text
-        except Exception as e:
-            await interaction.followup.send(f"Request failed entirely: {e}"[:2000])
-            return
-
-        if status != 200:
-            await interaction.followup.send(f"Resolved '{resolved_name}' (ID {player_id}). Status {status} (not 200). Response preview:\n```{text[:1000]}```"[:2000])
-            return
-
-        try:
-            reader = csv.reader(io.StringIO(text))
-            rows = list(reader)
-        except Exception as e:
-            await interaction.followup.send(f"Resolved '{resolved_name}' (ID {player_id}). Got status 200 but couldn't parse as CSV: {e}\n```{text[:700]}```"[:2000])
-            return
-
-        if len(rows) < 2:
-            header_preview = str(rows[0])[:1000] if rows else "EMPTY"
-            await interaction.followup.send(
-                f"Resolved '{resolved_name}' (ID {player_id}). Status 200, valid CSV, but 0 data rows.\n"
-                f"Total columns in header: {len(rows[0]) if rows else 0}\n"
-                f"Header preview: {header_preview}"[:2000]
-            )
-            return
-
-        header = rows[0]
-        sample_row = rows[1]
-        msg = (
-            f"**Statcast CSV export test — SUCCESS**\n\n"
-            f"Resolved '{resolved_name}' (ID {player_id})\n"
-            f"Rows returned: {len(rows) - 1}\n"
-            f"Columns: {len(header)}\n\n"
-            f"First 10 columns: {header[:10]}\n\n"
-            f"Sample first row (first 10 values): {sample_row[:10]}"
-        )
-        await interaction.followup.send(msg[:2000])
 
     async def on_ready(self):
         log.info("Logged in as %s", self.user)
