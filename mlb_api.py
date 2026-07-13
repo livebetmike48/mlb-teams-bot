@@ -84,6 +84,7 @@ def get_team_runs_log(team_id: int, season: int = CURRENT_SEASON) -> list[dict]:
             games.append({
                 "date": g["officialDate"], "runs": runs, "runs_allowed": runs_allowed,
                 "game_pk": g["gamePk"], "opp_pitcher_id": opp_pitcher_id,
+                "won": runs > runs_allowed,
             })
 
     games.sort(key=lambda g: g["date"])
