@@ -244,6 +244,88 @@ async def daily_weather(bot):
         log.error("weather cycle failed, will retry next scheduled run: %s", e)
 
 
+def _hour_rows(rows: list[dict]) -> list[str]:
+    """Hour-by-hour breakdown for one game's window."""
+    out = []
+    for r in rows:
+        hr = r["ts"].astimezone(ET).strftime("%-I %p").lstrip("0")
+        t = r.get("temperature_2m"); p = r.get("precipitation_probability")
+        w = r.get("wind_speed_10m"); d = compass(r.get("wind_direction_10m"))
+        out.append(f"  {hr} ET — {int(t) if t is not None else '?'}°F, "
+                   f"{int(p) if p is not None else '?'}% rain, "
+                   f"{int(w) if w is not None else '?'} mph {d}")
+    return out
+
+
+def _matches(g: dict, needle: str) -> bool:
+    n = needle.lower()
+    hay = [((g.get("venue") or {}).get("name") or ""),
+           (((g.get("teams") or {}).get("home") or {}).get("team", {}).get("name") or ""),
+           (((g.get("teams") or {}).get("away") or {}).get("team", {}).get("name") or "")]
+    return any(n in h.lower() for h in hay)
+
+
+def setup(bot):
+    """Register /weather. Called from setup_hook BEFORE the tree sync."""
+    from discord import app_commands
+
+    async def weather_cmd(interaction, place: str | None = None,
+                          post: bool = False):
+        await interaction.response.defer()
+        try:
+            if post:
+                if not CHANNEL_ID:
+                    await interaction.followup.send(
+                        "WEATHER_CHANNEL_ID isn't set — nowhere to post.")
+                    return
+                await _post_body(bot)
+                await interaction.followup.send(
+                    "✅ Fired the daily weather post through the webhook — "
+                    "check the channel.")
+                return
+            day = _today_et()
+            games = await asyncio.to_thread(fetch_games, day)
+            if place:
+                games = [g for g in games if _matches(g, place)]
+            if not games:
+                await interaction.followup.send(
+                    f"No games found for {place!r} today." if place
+                    else "No games today.")
+                return
+            forecasts = {}
+            for g in games:
+                c = _coords(g)
+                forecasts[g.get("gamePk")] = (
+                    await asyncio.to_thread(fetch_forecast, *c) if c else None)
+            lines = build_lines(games, forecasts)
+            if place and len(games) == 1:
+                g = games[0]
+                fp = datetime.fromisoformat(
+                    str(g.get("gameDate")).replace("Z", "+00:00"))
+                rows = _window(forecasts.get(g.get("gamePk")) or {}, fp)
+                if rows and not _roof(g):
+                    lines.append("Hour by hour:")
+                    lines.extend(_hour_rows(rows))
+            msg = f"**🌤 Game Weather — {day}**\n" + "\n".join(lines)
+            for i in range(0, len(msg), 1900):
+                await interaction.followup.send(msg[i:i + 1900])
+        except Exception as e:
+            log.exception("weather command failed")
+            await interaction.followup.send(
+                f"⚠️ Weather lookup failed — {type(e).__name__}: {e}")
+
+    weather_cmd = app_commands.describe(
+        place="Stadium or team name (optional — omit for the whole slate)",
+        post="True = send the daily post to the weather channel right now",
+    )(weather_cmd)
+    bot.tree.add_command(app_commands.Command(
+        name="weather",
+        description="Game weather: whole slate, or one stadium/team "
+                    "(hour-by-hour). post:True fires the daily webhook now.",
+        callback=weather_cmd,
+    ))
+
+
 def start(bot):
     """Called once from bot.on_ready. Additive; safe to call repeatedly."""
     if not ENABLED:
