@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import mlb_api
 import trends
 import storage
+import weather
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -114,6 +115,8 @@ class OffenseBot(discord.Client):
         for team in self.teams:
             self._register_trends_command(team)
 
+        weather.setup(self)
+
         setchannel_cmd = app_commands.Command(
             name="setchannel",
             description="Set this channel to receive the daily trends digest (12 PM ET)",
@@ -170,6 +173,7 @@ class OffenseBot(discord.Client):
         log.info("Logged in as %s", self.user)
         if not daily_digest.is_running():
             daily_digest.start(self)
+        weather.start(self)
 
 
 client = OffenseBot()
