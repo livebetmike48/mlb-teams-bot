@@ -320,8 +320,8 @@ def setup(bot):
     )(weather_cmd)
     bot.tree.add_command(app_commands.Command(
         name="weather",
-        description="Game weather: whole slate, or one stadium/team "
-                    "(hour-by-hour). post:True fires the daily webhook now.",
+        description="Game weather for the slate, or one stadium/team "
+                    "hour-by-hour. post:True posts to channel.",
         callback=weather_cmd,
     ))
 
