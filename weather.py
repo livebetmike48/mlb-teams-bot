@@ -184,9 +184,9 @@ def classify(rows: list[dict], roof: str | None) -> str:
         pk = int(max(precip))
         peak = max(rows, key=lambda r: r.get("precipitation_probability") or -1)
         hour = peak["ts"].astimezone(ET).strftime("%-I %p").lstrip("0")
-        tier = ("🔴 postponement risk" if pk >= TIER_RED else
-                "🟠 delay likely" if pk >= TIER_ORANGE else
-                "🟡 delay chance")
+        tier = ("🔴 delay likely, postponement possible" if pk >= TIER_RED else
+                "🟠 chance for delay" if pk >= TIER_ORANGE else
+                "🟡 slight chance for delay")
         parts.append(f"{tier} — {pk}% rain, peaking ~{hour} ET")
     if winds and max(winds) >= WIND_MIN:
         gusty = max(rows, key=lambda r: r.get("wind_speed_10m") or -1)
@@ -287,6 +287,12 @@ async def _post_body(bot):
             await _webhook_send(channel, chunk)
             chunk = ""
         chunk += "\n" + line
+    footer = "\n\n📝 forecaster notes: <https://mysportsweather.com>"
+    if len(chunk) + len(footer) > 1900:
+        await _webhook_send(channel, chunk)
+        chunk = footer.lstrip()
+    else:
+        chunk += footer
     if chunk.strip():
         await _webhook_send(channel, chunk)
     log.info("weather: posted %d games", len(lines))
