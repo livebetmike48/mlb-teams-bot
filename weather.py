@@ -47,10 +47,60 @@ WINDOW_H = 3                                                # first pitch -> +3h
 
 SCHED = ("https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={d}"
          "&hydrate=venue(location,fieldInfo)")
+# Three independent global models, worst case wins: a delay only sneaks
+# past this post if EVERY major model missed the storm. (The Aug 27
+# lesson: single-model ran 0% while another model ran 51% on the same
+# window -- one leg is not a forecast.)
+MODELS = os.getenv("WEATHER_MODELS",
+                   "gfs_seamless,icon_seamless,ecmwf_ifs025").split(",")
 METEO = ("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
          "&hourly=temperature_2m,precipitation_probability,wind_speed_10m,"
          "wind_direction_10m&temperature_unit=fahrenheit&wind_speed_unit=mph"
-         "&timezone=UTC&forecast_days=2")
+         "&timezone=UTC&forecast_days=2&models={models}")
+
+TIER_ORANGE = float(os.getenv("WEATHER_TIER_ORANGE", "60"))   # delay likely
+TIER_RED = float(os.getenv("WEATHER_TIER_RED", "80"))         # postponement risk
+
+
+def merge_models(raw: dict) -> dict:
+    """Fold per-model hourly arrays into one worst-case series with the
+    STANDARD key names, so everything downstream is model-count-blind.
+    precip & wind: per-hour MAX across models (wind direction taken from
+    the model holding that max); temperature: per-hour mean (models agree
+    tightly on temp; they diverge on rain). Single-model payloads pass
+    through untouched."""
+    if not raw:
+        return raw
+    times = raw.get("time") or []
+    if "precipitation_probability" in raw:          # single-model shape
+        return raw
+    def series(base):
+        cols = [raw[k] for k in raw
+                if k.startswith(base + "_") and isinstance(raw[k], list)]
+        return cols
+    out = {"time": times}
+    n = len(times)
+    p_cols, w_cols, t_cols, d_cols = (series("precipitation_probability"),
+                                      series("wind_speed_10m"),
+                                      series("temperature_2m"),
+                                      series("wind_direction_10m"))
+    def at(cols, i):
+        return [c[i] for c in cols if i < len(c) and c[i] is not None]
+    P, W, T, D = [], [], [], []
+    for i in range(n):
+        p, w, t = at(p_cols, i), at(w_cols, i), at(t_cols, i)
+        P.append(max(p) if p else None)
+        if w:
+            j = max(range(len(w)), key=lambda k: w[k])
+            W.append(w[j])
+            dvals = at(d_cols, i)
+            D.append(dvals[j] if j < len(dvals) else (dvals[0] if dvals else None))
+        else:
+            W.append(None); D.append(None)
+        T.append(round(sum(t) / len(t), 1) if t else None)
+    out.update({"precipitation_probability": P, "wind_speed_10m": W,
+                "temperature_2m": T, "wind_direction_10m": D})
+    return out
 
 
 def _et_zone():
@@ -131,9 +181,13 @@ def classify(rows: list[dict], roof: str | None) -> str:
                             nums("temperature_2m"), nums("wind_speed_10m"))
     parts = []
     if precip and max(precip) >= PRECIP_MIN:
+        pk = int(max(precip))
         peak = max(rows, key=lambda r: r.get("precipitation_probability") or -1)
         hour = peak["ts"].astimezone(ET).strftime("%-I %p").lstrip("0")
-        parts.append(f"🌧 {int(max(precip))}% rain risk, peaking ~{hour} ET")
+        tier = ("🔴 postponement risk" if pk >= TIER_RED else
+                "🟠 delay likely" if pk >= TIER_ORANGE else
+                "🟡 delay chance")
+        parts.append(f"{tier} — {pk}% rain, peaking ~{hour} ET")
     if winds and max(winds) >= WIND_MIN:
         gusty = max(rows, key=lambda r: r.get("wind_speed_10m") or -1)
         parts.append(f"💨 {int(max(winds))} mph {compass(gusty.get('wind_direction_10m'))} wind")
@@ -181,9 +235,10 @@ def fetch_games(date_str: str) -> list[dict]:
 
 def fetch_forecast(lat, lon) -> dict | None:
     try:
-        r = requests.get(METEO.format(lat=lat, lon=lon), timeout=20)
+        r = requests.get(METEO.format(lat=lat, lon=lon,
+                                      models=",".join(MODELS)), timeout=20)
         r.raise_for_status()
-        return r.json().get("hourly") or {}
+        return merge_models(r.json().get("hourly") or {})
     except Exception as e:
         log.warning("weather: forecast failed for %s,%s: %s", lat, lon, e)
         return None
@@ -224,7 +279,8 @@ async def _post_body(bot):
         forecasts[g.get("gamePk")] = (
             await asyncio.to_thread(fetch_forecast, *c) if c else None)
     lines = build_lines(games, forecasts)
-    header = f"**🌤 Game Weather — {day}** (first pitch → +{WINDOW_H}h)"
+    header = (f"**🌤 Game Weather — {day}** (first pitch → +{WINDOW_H}h, "
+              f"worst case across {len(MODELS)} models)")
     chunk = header
     for line in lines:
         if len(chunk) + len(line) > 1900:
