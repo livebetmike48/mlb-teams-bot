@@ -12,6 +12,7 @@ import mlb_api
 import trends
 import storage
 import weather
+import transactions
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -116,6 +117,7 @@ class OffenseBot(discord.Client):
             self._register_trends_command(team)
 
         weather.setup(self)
+        transactions.setup(self)
 
         setchannel_cmd = app_commands.Command(
             name="setchannel",
@@ -174,6 +176,7 @@ class OffenseBot(discord.Client):
         if not daily_digest.is_running():
             daily_digest.start(self)
         weather.start(self)
+        transactions.start(self)
 
 
 client = OffenseBot()
