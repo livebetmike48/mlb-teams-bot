@@ -12,10 +12,10 @@ WHAT POSTS LIVE (every poll, as detected):
     ⬆️ recalled / contract selected        ⚠️ designated for assignment
     🔄 trades
 
-Everything else (signings, releases, waiver claims, outright assignments,
-minor league deals) is stored but NOT posted -- all 30 clubs file dozens of
-moves a day and the firehose would bury the signal. The full day is always
-available on demand via /transactions.
+Everything else (signings, releases, waiver claims, bereavement/paternity,
+minor league deals) is stored for dedupe but never shown anywhere -- Mike
+only wants MLB roster-impacting moves. /transactions shows the same signal
+categories on demand.
 
 Dedupe is on the feed's own transaction id, persisted in the bot's SQLite
 DB, so a redeploy can never repost. FIRST BOOT PRIMES QUIETLY: with an
@@ -65,6 +65,10 @@ ET = timezone(timedelta(hours=-4))
 # is everything unmatched: stored, never posted, visible via /transactions.
 CATEGORIES = [
     ("rehab",     "🔁", True,  ("rehab assignment",)),
+    # transfer must come BEFORE activated: "transferred ... from the 10-day
+    # injured list to the 60-day injured list" contains the activation
+    # phrase "from the ... injured list" but means the OPPOSITE direction.
+    ("il",        "🚑", True,  ("transferred",)),
     ("il",        "🚑", True,  ("on the 7-day injured list", "on the 10-day injured list",
                                 "on the 15-day injured list", "on the 60-day injured list",
                                 "on the injured list")),
@@ -278,11 +282,12 @@ def setup(bot):
             await interaction.followup.send(f"No transactions filed on {day}.")
             return
 
-        live = [line_for(t) for t in txs if classify(t)[2]]
-        quiet = [line_for(t) for t in txs if not classify(t)[2]]
-        lines = live + (["", f"📋 Other moves ({len(quiet)}):"] + quiet if quiet else [])
+        lines = [line_for(t) for t in txs if classify(t)[2]]
+        if not lines:
+            await interaction.followup.send(f"No roster-impacting moves on {day}.")
+            return
 
-        header = f"**📋 MLB Transactions — {day}** ({len(txs)} total)"
+        header = f"**📋 MLB Transactions — {day}** ({len(lines)} roster moves)"
         chunk = header
         sent = False
         for line in lines:
