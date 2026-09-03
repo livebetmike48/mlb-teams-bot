@@ -287,7 +287,8 @@ async def _post_body(bot):
             await _webhook_send(channel, chunk)
             chunk = ""
         chunk += "\n" + line
-    footer = "\n\n📝 forecaster notes: <https://mysportsweather.com>"
+    footer = ("\n\n📝 forecaster notes (Kevin Roth): "
+              "<https://propfinder.app/weather>")
     if len(chunk) + len(footer) > 1900:
         await _webhook_send(channel, chunk)
         chunk = footer.lstrip()
